@@ -34,9 +34,23 @@ def _redirect_uri() -> str:
 
 
 def _flow(state: str | None = None) -> Flow:
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if credentials_json:
+        try:
+            client_config = json.loads(credentials_json)
+        except json.JSONDecodeError as exc:
+            raise GmailNotConnectedError("GOOGLE_CREDENTIALS_JSON is not valid JSON.") from exc
+
+        return Flow.from_client_config(
+            client_config,
+            scopes=SCOPES,
+            redirect_uri=_redirect_uri(),
+            state=state,
+        )
+
     if not CREDENTIALS_FILE.exists():
         raise GmailNotConnectedError(
-            "Missing backend/credentials.json. Create an OAuth web client in Google Cloud and download it."
+            "Missing backend/credentials.json or GOOGLE_CREDENTIALS_JSON. Create an OAuth web client in Google Cloud and provide it."
         )
 
     flow = Flow.from_client_secrets_file(
