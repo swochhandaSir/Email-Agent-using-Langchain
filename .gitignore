@@ -5,6 +5,9 @@
 backend/.env
 backend/.env.*
 !backend/.env.example
+backend/credentials.json
+backend/token.json
+backend/oauth_state.txt
 
 # Python
 __pycache__/

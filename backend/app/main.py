@@ -1,12 +1,22 @@
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agent import run_email_agent
-from .email_store import email_store
+from .gmail_service import (
+    GmailNotConnectedError,
+    disconnect_gmail,
+    get_authorization_url,
+    get_message,
+    gmail_status,
+    list_mailbox,
+    save_callback_token,
+    send_message,
+)
 
 load_dotenv()
 
@@ -24,6 +34,13 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     mailbox: dict
+    pending_email: dict | None = None
+
+
+class ApprovedEmailRequest(BaseModel):
+    to: str = Field(min_length=1)
+    subject: str = Field(min_length=1)
+    body: str = Field(min_length=1)
 
 
 app = FastAPI(title="PulseMail Email Assistant API")
@@ -45,7 +62,64 @@ def health() -> dict:
 
 @app.get("/api/mailbox")
 def mailbox() -> dict:
-    return email_store.snapshot()
+    try:
+        return list_mailbox()
+    except GmailNotConnectedError as exc:
+        return {"inbox": [], "sent": [], "connected": False, "reason": str(exc)}
+
+
+@app.get("/api/mailbox/messages/{message_id}")
+def mailbox_message(message_id: str) -> dict:
+    try:
+        return get_message(message_id)
+    except GmailNotConnectedError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not load Gmail message: {exc}") from exc
+
+
+@app.get("/api/gmail/status")
+def gmail_connection_status() -> dict:
+    return gmail_status()
+
+
+@app.get("/api/gmail/authorize")
+def gmail_authorize() -> dict:
+    try:
+        return {"authorization_url": get_authorization_url()}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/gmail/logout")
+def gmail_logout() -> dict:
+    disconnect_gmail()
+    return {"connected": False}
+
+
+@app.get("/api/gmail/callback", response_class=HTMLResponse)
+def gmail_callback(request: Request) -> str:
+    try:
+        save_callback_token(str(request.url), request.query_params.get("state"))
+    except Exception as exc:
+        message = str(exc) or exc.__class__.__name__
+        return f"""
+        <html>
+          <body style="font-family: system-ui; padding: 32px;">
+            <h1>Gmail connection failed</h1>
+            <p>{message}</p>
+          </body>
+        </html>
+        """
+
+    return """
+    <html>
+      <body style="font-family: system-ui; padding: 32px;">
+        <h1>Gmail connected</h1>
+        <p>You can close this tab and return to PulseMail.</p>
+      </body>
+    </html>
+    """
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -58,11 +132,33 @@ def chat(request: ChatRequest) -> ChatResponse:
         )
 
     try:
-        reply = run_email_agent(
+        agent_result = run_email_agent(
             request.message,
             [message.model_dump() for message in request.history],
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
 
-    return ChatResponse(reply=reply, mailbox=email_store.snapshot())
+    try:
+        mailbox_snapshot = list_mailbox()
+    except GmailNotConnectedError:
+        mailbox_snapshot = {"inbox": [], "sent": []}
+
+    return ChatResponse(
+        reply=agent_result["reply"],
+        mailbox=mailbox_snapshot,
+        pending_email=agent_result.get("pending_email"),
+    )
+
+
+@app.post("/api/mailbox/send-approved", response_model=ChatResponse)
+def send_approved_email(request: ApprovedEmailRequest) -> ChatResponse:
+    try:
+        reply = send_message(to=request.to, subject=request.subject, body=request.body)
+        mailbox_snapshot = list_mailbox()
+    except GmailNotConnectedError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not send Gmail message: {exc}") from exc
+
+    return ChatResponse(reply=reply, mailbox=mailbox_snapshot, pending_email=None)
