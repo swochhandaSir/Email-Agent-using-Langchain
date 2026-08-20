@@ -1,24 +1,45 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Archive,
   Bot,
   CheckCircle2,
   Clock3,
+  Edit3,
+  Forward,
   History,
+  Inbox,
   Mail,
+  MoreVertical,
+  Paperclip,
   PenLine,
   RefreshCw,
+  Reply,
+  Search,
   Send,
   Sparkles,
+  Star,
+  Trash2,
 } from 'lucide-react';
 import './styles.css';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 const starterPrompts = [
-  'Summarize my unread email and suggest what needs action.',
-  'What should I handle first from the inbox?',
+  '📊 Summarize my unread emails',
+  '🔥 What needs my attention?',
+  "✉️ Draft a reply to John's email",
+  "📅 Find emails about tomorrow's meeting",
+  '🧹 Clean up my inbox',
+  '⭐ Show my important emails',
+];
+
+const folders = [
+  { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'sent', label: 'Sent', icon: Send },
+  { id: 'drafts', label: 'Drafts', icon: Edit3 },
+  { id: 'starred', label: 'Starred', icon: Star },
+  { id: 'trash', label: 'Trash', icon: Trash2 },
 ];
 
 function summarizeTask(text) {
@@ -181,26 +202,55 @@ function MessageContent({ message }) {
 
 function App() {
   const [activeView, setActiveView] = useState('mails');
+  const [activeFolder, setActiveFolder] = useState('inbox');
   const [mailbox, setMailbox] = useState({ inbox: [], sent: [] });
-  const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      content:
-        'I can triage your inbox, draft replies, and send messages when you ask me to.',
-    },
-  ]);
+  const [messages, setMessages] = useState([]);
+  const [streamingReply, setStreamingReply] = useState('');
   const [input, setInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [gmail, setGmail] = useState({ connected: false });
   const [selectedEmail, setSelectedEmail] = useState(null);
   const [emailLoading, setEmailLoading] = useState(false);
   const [pendingEmail, setPendingEmail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const pendingBodyRef = useRef(null);
 
   const unreadCount = useMemo(
     () => mailbox.inbox.filter((email) => email.unread).length,
     [mailbox.inbox],
   );
+
+  const folderCounts = useMemo(
+    () => ({
+      inbox: mailbox.inbox.length,
+      sent: mailbox.sent.length,
+      drafts: pendingEmail ? 1 : 0,
+      starred: mailbox.inbox.filter((email) => isImportant(email)).length,
+      trash: 0,
+    }),
+    [mailbox, pendingEmail],
+  );
+
+  const visibleEmails = useMemo(() => {
+    const source = activeFolder === 'sent' ? mailbox.sent : mailbox.inbox;
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    const filtered =
+      activeFolder === 'starred'
+        ? source.filter((email) => isImportant(email))
+        : activeFolder === 'drafts' || activeFolder === 'trash'
+          ? []
+          : source;
+
+    if (!normalizedQuery) return filtered;
+    return filtered.filter((email) =>
+      [email.sender, email.from, email.to, email.subject, email.body, email.snippet]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedQuery),
+    );
+  }, [activeFolder, mailbox, searchQuery]);
 
   const chatHistory = useMemo(() => {
     const taskItems = messages
@@ -322,23 +372,41 @@ function App() {
       }
 
       const payload = await response.json();
-      setMessages([...nextMessages, { role: 'assistant', content: payload.reply }]);
+      streamAssistantReply(payload.reply, nextMessages);
       setMailbox(payload.mailbox);
       if (payload.pending_email) {
         setPendingEmail(payload.pending_email);
       }
     } catch (err) {
       setError(err.message);
-      setMessages([
-        ...nextMessages,
-        {
-          role: 'assistant',
-          content: 'I could not reach the backend. Check the API server and Groq key.',
-        },
-      ]);
-    } finally {
-      setLoading(false);
+      streamAssistantReply(
+        'I could not reach the backend. Check the API server and Groq key.',
+        nextMessages,
+      );
     }
+  }
+
+  function streamAssistantReply(reply, baseMessages) {
+    setStreamingReply('');
+    let index = 0;
+    const timer = window.setInterval(() => {
+      index += 8;
+      setStreamingReply(reply.slice(0, index));
+      if (index >= reply.length) {
+        window.clearInterval(timer);
+        setStreamingReply('');
+        setMessages([...baseMessages, { role: 'assistant', content: reply }]);
+        setLoading(false);
+      }
+    }, 18);
+  }
+
+  function runAiSearch(event) {
+    event.preventDefault();
+    const query = searchQuery.trim();
+    if (!query) return;
+    setActiveView('chat');
+    sendMessage(`Find ${query} in my mailbox and explain the matching emails.`);
   }
 
   async function sendApprovedEmail() {
@@ -388,6 +456,48 @@ function App() {
     sendMessage();
   }
 
+  function isImportant(email) {
+    const content = `${email.subject || ''} ${email.body || ''}`.toLowerCase();
+    return /urgent|approval|needed|meeting|review|important|tomorrow/.test(content);
+  }
+
+  function hasAttachment(email) {
+    return /invoice|attachment|attached|contract|pdf|doc/.test(
+      `${email.subject || ''} ${email.body || ''}`.toLowerCase(),
+    );
+  }
+
+  function formatEmailTime(email) {
+    const raw = email.received_at || email.sent_at || email.date;
+    if (!raw) return 'Now';
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return raw;
+    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function senderInitial(email) {
+    return (email.sender || email.to || email.from || '?').trim().charAt(0).toUpperCase();
+  }
+
+  function askForDraft(email = selectedEmail) {
+    if (!email) return;
+    setActiveView('chat');
+    sendMessage(`Draft a concise reply to ${email.sender || email.from} about "${email.subject}".`);
+  }
+
+  function emailAiSummary(email) {
+    const subject = email.subject || 'this email';
+    const body = email.body || email.snippet || '';
+    const actionRequired = isImportant(email);
+    return {
+      summary: body
+        ? `${email.sender || email.from || 'The sender'} is asking about ${subject.toLowerCase()}.`
+        : `${subject} is ready for AI review once the full message loads.`,
+      action: actionRequired ? 'Yes - respond before tomorrow' : 'No immediate response detected',
+      response: actionRequired ? 'That works for me. Thanks!' : 'Thanks for the update.',
+    };
+  }
+
   return (
     <main className="app-shell">
       <section className="workspace">
@@ -409,7 +519,7 @@ function App() {
                 type="button"
               >
                 <Mail size={17} />
-                Mails
+                Inbox
               </button>
               <button
                 className={activeView === 'chat' ? 'active' : ''}
@@ -417,16 +527,30 @@ function App() {
                 type="button"
               >
                 <Bot size={17} />
-                AI Chat
+                AI Assistant
               </button>
             </div>
-            <button
-              className={gmail.connected ? 'auth-button logout' : 'auth-button'}
-              onClick={gmail.connected ? logoutGmail : connectGmail}
-              type="button"
-            >
-              {gmail.connected ? 'Logout' : 'Login'}
+            <button className="top-search" onClick={() => setActiveView('mails')} type="button">
+              <Search size={18} />
             </button>
+            {gmail.connected ? (
+              <details className="account-menu">
+                <summary>
+                  <span>{(gmail.email || 'S').charAt(0).toUpperCase()}</span>
+                  <MoreVertical size={16} />
+                </summary>
+                <div className="account-popover">
+                  <strong>{gmail.email || 'My Account'}</strong>
+                  <button type="button">Settings</button>
+                  <button type="button">Connected Accounts</button>
+                  <button onClick={logoutGmail} type="button">Logout</button>
+                </div>
+              </details>
+            ) : (
+              <button className="auth-button" onClick={connectGmail} type="button">
+                Login
+              </button>
+            )}
           </div>
         </header>
 
@@ -450,15 +574,44 @@ function App() {
 
         {activeView === 'mails' ? (
           <section className="mail-workspace">
+            <aside className="folder-rail">
+              {folders.map(({ id, label, icon: Icon }) => (
+                <button
+                  className={activeFolder === id ? 'active' : ''}
+                  key={id}
+                  onClick={() => setActiveFolder(id)}
+                  type="button"
+                >
+                  <Icon size={17} />
+                  <span>{label}</span>
+                  <b>{id === 'inbox' ? unreadCount : folderCounts[id]}</b>
+                </button>
+              ))}
+              <div className="labels">
+                <span>Labels</span>
+                <p><i /> Work</p>
+                <p><i /> Important</p>
+              </div>
+            </aside>
+
             <div className="mail-list main-list">
               <div className="section-title">
-                <h2>Today&apos;s Inbox</h2>
+                <h2>{folders.find((folder) => folder.id === activeFolder)?.label}</h2>
                 <button onClick={refreshMailbox} aria-label="Refresh mailbox">
                   <RefreshCw size={16} />
                 </button>
               </div>
+              <form className="mail-search" onSubmit={runAiSearch}>
+                <Search size={17} />
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="AI search: emails from John about the project meeting"
+                />
+                <button type="submit">Ask AI</button>
+              </form>
               {mailbox.date && <p className="mail-date">Showing {mailbox.date}</p>}
-              {mailbox.inbox.map((email) => (
+              {visibleEmails.map((email) => (
                 <button
                   className={`mail ${email.unread ? 'unread' : ''} ${
                     selectedEmail?.id === email.id ? 'selected' : ''
@@ -467,16 +620,28 @@ function App() {
                   onClick={() => openEmail(email)}
                   type="button"
                 >
-                  <div>
-                    <strong>{email.sender}</strong>
+                  <span className="avatar">{senderInitial(email)}</span>
+                  <div className="mail-copy">
+                    <strong>{email.sender || email.to || 'Unknown sender'}</strong>
                     <span>{email.subject}</span>
+                    <small>{email.snippet || email.body}</small>
                   </div>
-                  {email.unread ? <b>New</b> : <CheckCircle2 size={15} />}
+                  <div className="mail-meta">
+                    <time>{formatEmailTime(email)}</time>
+                    <span>
+                      <Star
+                        size={15}
+                        fill={isImportant(email) ? 'currentColor' : 'none'}
+                      />
+                      {hasAttachment(email) && <Paperclip size={15} />}
+                    </span>
+                    {email.unread ? <b>New</b> : <CheckCircle2 size={15} />}
+                  </div>
                 </button>
               ))}
-              {mailbox.inbox.length === 0 && (
+              {visibleEmails.length === 0 && (
                 <p className="empty-state">
-                  {gmail.connected ? 'No mails for today.' : "Login to load today's mails."}
+                  {gmail.connected ? 'No matching mails.' : "Login to load today's mails."}
                 </p>
               )}
             </div>
@@ -486,10 +651,13 @@ function App() {
                 <article className="email-reader">
                   <div className="email-reader-header">
                     <div>
-                      <span className="eyebrow">Selected Email</span>
+                      <span className="eyebrow">From: {selectedEmail.from || selectedEmail.sender}</span>
                       <h3>{selectedEmail.subject}</h3>
                     </div>
-                    <Archive size={18} />
+                    <div className="reader-icons">
+                      <button type="button" aria-label="Star message"><Star size={18} /></button>
+                      <button type="button" aria-label="Archive message"><Archive size={18} /></button>
+                    </div>
                   </div>
                   <dl>
                     <div>
@@ -508,6 +676,23 @@ function App() {
                   <p className="email-body">
                     {emailLoading ? 'Loading full email...' : selectedEmail.body || selectedEmail.snippet}
                   </p>
+                  <section className="ai-email-card">
+                    <h4>AI Summary</h4>
+                    <p>{emailAiSummary(selectedEmail).summary}</p>
+                    <h4>Action required</h4>
+                    <p className={isImportant(selectedEmail) ? 'action-hot' : ''}>
+                      {isImportant(selectedEmail) ? '🔴 ' : '🔵 '}
+                      {emailAiSummary(selectedEmail).action}
+                    </p>
+                    <h4>Suggested response</h4>
+                    <blockquote>{emailAiSummary(selectedEmail).response}</blockquote>
+                    <button onClick={() => askForDraft(selectedEmail)} type="button">Draft Reply</button>
+                  </section>
+                  <div className="reader-actions">
+                    <button onClick={() => askForDraft(selectedEmail)} type="button"><Reply size={16} /> Reply</button>
+                    <button onClick={() => sendMessage(`Forward "${selectedEmail.subject}" with a short note.`)} type="button"><Forward size={16} /> Forward</button>
+                    <button onClick={() => sendMessage(`Summarize this email: ${selectedEmail.subject}`)} type="button"><Sparkles size={16} /> AI Summarize</button>
+                  </div>
                 </article>
               ) : (
                 <div className="empty-reader">
@@ -541,6 +726,17 @@ function App() {
 
             <div className="chat-panel">
               <div className="conversation">
+                {messages.length === 0 && (
+                  <section className="agent-actions">
+                    <span>✨ AI Assistant</span>
+                    <p>I can find unread mail, identify what needs a response, draft replies, and prepare cleanup actions for review.</p>
+                    <div>
+                      <button onClick={() => sendMessage('Show urgent emails')} type="button">Show Urgent Emails</button>
+                      <button onClick={() => sendMessage('Draft all replies that need my approval')} type="button">Draft All Replies</button>
+                      <button onClick={() => sendMessage('Summarize everything important')} type="button">Summarize Everything</button>
+                    </div>
+                  </section>
+                )}
                 {messages.map((message, index) => (
                   <div className={`bubble ${message.role}`} key={`${message.role}-${index}`}>
                     <div className="bubble-icon">
@@ -555,7 +751,9 @@ function App() {
                       <Bot size={17} />
                     </div>
                     <div className="message-content">
-                      <p className="message-line">Thinking through your mailbox...</p>
+                      <p className="message-line">
+                        {streamingReply || 'Checking mailbox, reading relevant messages, and preparing a response...'}
+                      </p>
                     </div>
                   </div>
                 )}
@@ -567,7 +765,7 @@ function App() {
                     <div className="email-preview-header">
                       <div>
                         <span className="eyebrow">Review Before Sending</span>
-                        <h3>Email Preview</h3>
+                        <h3>I&apos;ve drafted this reply</h3>
                       </div>
                       <Mail size={18} />
                     </div>
@@ -593,6 +791,7 @@ function App() {
                     <label>
                       Message
                       <textarea
+                        ref={pendingBodyRef}
                         value={pendingEmail.body}
                         onChange={(event) =>
                           setPendingEmail({ ...pendingEmail, body: event.target.value })
@@ -607,27 +806,27 @@ function App() {
                         onClick={sendApprovedEmail}
                         type="button"
                       >
-                        Approve
+                        Send Email
                       </button>
                       <button
                         className="cancel-approval"
                         disabled={loading}
-                        onClick={cancelPendingEmail}
+                        onClick={() => pendingBodyRef.current?.focus()}
                         type="button"
                       >
-                        Reject
+                        Edit
                       </button>
                     </div>
                   </section>
                 )}
 
-                <div className="quick-prompts" aria-label="Suggested prompts">
+                {messages.length === 0 && !loading && <div className="quick-prompts" aria-label="Suggested prompts">
                   {starterPrompts.map((prompt) => (
                     <button key={prompt} onClick={() => sendMessage(prompt)} type="button">
                       {prompt}
                     </button>
                   ))}
-                </div>
+                </div>}
 
                 <form className="composer" onSubmit={submit}>
                   <textarea

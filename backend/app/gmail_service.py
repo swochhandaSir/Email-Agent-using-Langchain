@@ -221,18 +221,16 @@ def _message_summary(message: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _today_query() -> str:
-    today = datetime.now().date()
-    tomorrow = today + timedelta(days=1)
-    return f"after:{today:%Y/%m/%d} before:{tomorrow:%Y/%m/%d}"
+def _recent_query(days: int = 14) -> str:
+    return f"newer_than:{days}d"
 
 
 def _is_today(message: dict[str, Any]) -> bool:
     return _message_local_date(message) == datetime.now().date().isoformat()
 
 
-def list_mailbox(max_results: int = 10, day_query: str | None = None) -> dict[str, Any]:
-    query = day_query or _today_query()
+def list_mailbox(max_results: int = 20, day_query: str | None = None) -> dict[str, Any]:
+    query = day_query or _recent_query()
 
     def list_messages(label: str) -> list[dict[str, Any]]:
         service = _service()
@@ -246,8 +244,6 @@ def list_mailbox(max_results: int = 10, day_query: str | None = None) -> dict[st
 
         def fetch_summary(item: dict[str, Any]) -> dict[str, Any] | None:
             message = _metadata_message(_service(), item["id"])
-            if not _is_today(message):
-                return None
             return _message_summary(message)
 
         summaries = _parallel_map(message_refs, fetch_summary)
@@ -260,7 +256,7 @@ def list_mailbox(max_results: int = 10, day_query: str | None = None) -> dict[st
     return {
         "inbox": inbox_future.result(),
         "sent": sent_future.result(),
-        "date": datetime.now().date().isoformat(),
+        "date": "recent mail",
         "query": query,
     }
 
