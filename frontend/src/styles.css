@@ -10,6 +10,7 @@
 body { margin: 0; min-width: 320px; background: #0f1715; }
 button, input, textarea { font: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
 
 .app-shell { min-height: 100vh; background: #0f1715; }
 .workspace { display: flex; flex-direction: column; min-height: 100vh; min-width: 0; padding: 14px; }
@@ -40,6 +41,10 @@ button { cursor: pointer; }
 .view-tabs button.active { color: #f3f7f5; background: #2d6a5c; }
 .auth-button, .composer button, .send-approval { color: #fff; background: #d86f5c; }
 .top-search { width: 36px; color: #f3f7f5; background: #17211e; border: 1px solid #263934; }
+.view-tabs button, .auth-button, .top-search {
+  transition: background-color .18s ease, color .18s ease, opacity .18s ease, transform .18s ease;
+}
+.auth-button.is-loading { opacity: .78; }
 
 .account-menu { position: relative; }
 .account-menu summary {
@@ -68,8 +73,10 @@ button { cursor: pointer; }
   display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 8px;
   min-height: 38px; padding: 0 9px; border: 0; border-radius: 7px; color: #c8d7d2; background: transparent;
   text-align: left;
+  transition: background-color .18s ease, color .18s ease, transform .18s ease;
 }
 .folder-rail button.active, .folder-rail button:hover { color: #f3f7f5; background: #22312d; }
+.folder-rail button:hover { transform: translateX(2px); }
 .folder-rail b {
   min-width: 24px; padding: 2px 7px; border-radius: 999px; color: #f3f7f5; background: #2d6a5c;
   font-size: .75rem; text-align: center;
@@ -103,8 +110,10 @@ button { cursor: pointer; }
 .mail {
   display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; width: 100%;
   padding: 10px; border: 1px solid transparent; border-radius: 8px; color: inherit; background: #1b2824; text-align: left;
+  transition: transform .18s ease, border-color .18s ease, background-color .18s ease, box-shadow .18s ease;
 }
 .mail:hover, .mail.selected { border-color: #2d6a5c; background: #22312d; }
+.mail:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(0, 0, 0, .18); }
 .mail.unread .mail-copy strong, .mail.unread .mail-copy span { color: #f3f7f5; font-weight: 850; }
 .mail-copy { display: grid; gap: 3px; min-width: 0; }
 .mail strong, .mail span, .mail small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -138,6 +147,10 @@ button { cursor: pointer; }
 .ai-email-card button, .reader-actions button {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 10px;
   border: 0; border-radius: 7px; color: #fff; background: #2d6a5c; font-weight: 800;
+  transition: transform .18s ease, background-color .18s ease;
+}
+.ai-email-card button:hover, .reader-actions button:hover, .agent-actions button:hover, .quick-prompts button:hover {
+  transform: translateY(-1px);
 }
 .action-hot { color: #ffb5a8 !important; font-weight: 800; }
 .reader-actions { flex-wrap: wrap; }
@@ -159,6 +172,7 @@ button { cursor: pointer; }
 
 .agent-actions {
   display: grid; gap: 12px; padding: 16px; border: 1px solid #2d6a5c; border-radius: 8px; background: #10241f;
+  animation: fade-slide-in .22s ease both;
 }
 .agent-actions span { font-weight: 850; }
 .agent-actions p { margin: 0; color: #c8d7d2; }
@@ -170,6 +184,8 @@ button { cursor: pointer; }
 
 .bubble { display: flex; align-items: flex-start; gap: 10px; max-width: 820px; }
 .bubble.user { align-self: flex-end; flex-direction: row-reverse; }
+.bubble.assistant { animation: fade-slide-in .24s ease both; }
+.bubble.user { animation: fade-slide-in-user .2s ease both; }
 .message-text, .message-content {
   margin: 0; padding: 12px 14px; border: 1px solid #263934; border-radius: 8px; background: #1b2824;
   line-height: 1.52; white-space: pre-wrap;
@@ -193,8 +209,14 @@ button { cursor: pointer; }
 .composer button {
   display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; min-height: 44px;
   border: 0; border-radius: 8px; font-weight: 800;
+  transition: opacity .18s ease, transform .18s ease, background-color .18s ease;
 }
 .composer button:disabled, .email-preview-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.button-spinner {
+  width: 18px; height: 18px; border: 2px solid rgba(255, 255, 255, .34); border-top-color: #fff;
+  border-radius: 50%; animation: spin .7s linear infinite;
+}
+.processing-sparkle { animation: sparkle-pulse 1s ease-in-out infinite; }
 
 .email-preview { display: grid; gap: 10px; padding: 12px; }
 .email-preview-header h3 { margin: 3px 0 0; font-size: 1rem; letter-spacing: 0; }
@@ -207,6 +229,49 @@ button { cursor: pointer; }
 .email-preview-actions button { min-height: 38px; padding: 0 13px; border: 0; border-radius: 8px; font-weight: 850; }
 .cancel-approval { color: #f3f7f5; background: #2d6a5c; }
 .error { margin: 10px 0 0; color: #ffb5a8; font-weight: 750; }
+.toast {
+  position: fixed; right: 18px; bottom: 18px; z-index: 20; display: flex; align-items: center; gap: 9px;
+  max-width: min(360px, calc(100vw - 36px)); padding: 12px 14px; border: 1px solid #2d6a5c;
+  border-radius: 8px; color: #f3f7f5; background: #17211e; box-shadow: 0 18px 46px rgba(0, 0, 0, .32);
+  animation: toast-in .22s ease both;
+}
+.toast.success svg { color: #7ce0c6; }
+.toast.info svg { color: #9baea8; }
+.toast.error { border-color: #d86f5c; }
+.toast.error svg { color: #ffb5a8; }
+
+@keyframes fade-slide-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-slide-in-user {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes sparkle-pulse {
+  0%, 100% { opacity: .62; transform: scale(.94) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1.08) rotate(8deg); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+}
 
 @media (max-width: 1100px) {
   .mail-workspace { grid-template-columns: 170px minmax(280px, 390px); }

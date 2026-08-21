@@ -213,8 +213,12 @@ function App() {
   const [emailLoading, setEmailLoading] = useState(false);
   const [pendingEmail, setPendingEmail] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [authChecking, setAuthChecking] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
   const [error, setError] = useState('');
+  const [toast, setToast] = useState(null);
   const pendingBodyRef = useRef(null);
+  const toastTimerRef = useRef(null);
 
   const unreadCount = useMemo(
     () => mailbox.inbox.filter((email) => email.unread).length,
@@ -280,25 +284,76 @@ function App() {
     refreshGmailStatus();
   }, []);
 
+  useEffect(() => {
+    async function refreshAfterAuthReturn() {
+      const status = await refreshGmailStatus();
+      if (status.connected) refreshMailbox();
+    }
+
+    window.addEventListener('focus', refreshAfterAuthReturn);
+    document.addEventListener('visibilitychange', refreshAfterAuthReturn);
+
+    return () => {
+      window.removeEventListener('focus', refreshAfterAuthReturn);
+      document.removeEventListener('visibilitychange', refreshAfterAuthReturn);
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    },
+    [],
+  );
+
+  function showToast(message, tone = 'success') {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    setToast({ message, tone });
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3600);
+  }
+
   async function refreshGmailStatus() {
     try {
       const response = await fetch(`${API_URL}/api/gmail/status`);
       if (!response.ok) throw new Error('Gmail status unavailable');
-      setGmail(await response.json());
+      const status = await response.json();
+      setGmail(status);
+      return status;
     } catch (err) {
-      setGmail({ connected: false, reason: err.message });
+      const status = { connected: false, reason: err.message };
+      setGmail(status);
+      return status;
     }
   }
 
   async function connectGmail() {
     try {
       setError('');
+      setAuthChecking(true);
       const response = await fetch(`${API_URL}/api/gmail/authorize`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || 'Could not start Gmail OAuth');
-      window.open(payload.authorization_url, '_blank', 'noopener,noreferrer');
+      const authWindow = window.open(payload.authorization_url, '_blank', 'noopener,noreferrer');
+      showToast('Complete Gmail login in the opened tab.', 'info');
+
+      let attempts = 0;
+      const pollForLogin = window.setInterval(async () => {
+        attempts += 1;
+        const status = await refreshGmailStatus();
+        if (status.connected) {
+          window.clearInterval(pollForLogin);
+          setAuthChecking(false);
+          await refreshMailbox();
+          showToast('Gmail connected successfully.', 'success');
+        } else if (attempts >= 45 || authWindow?.closed) {
+          window.clearInterval(pollForLogin);
+          setAuthChecking(false);
+        }
+      }, 2000);
     } catch (err) {
+      setAuthChecking(false);
       setError(err.message);
+      showToast(err.message, 'error');
     }
   }
 
@@ -310,8 +365,10 @@ function App() {
       setGmail({ connected: false });
       setMailbox({ inbox: [], sent: [] });
       setSelectedEmail(null);
+      showToast('Logged out successfully.', 'success');
     } catch (err) {
       setError(err.message);
+      showToast(err.message, 'error');
     }
   }
 
@@ -354,6 +411,7 @@ function App() {
     setMessages(nextMessages);
     setInput('');
     setLoading(true);
+    setSendingEmail(true);
     setError('');
 
     try {
@@ -430,10 +488,13 @@ function App() {
         { role: 'assistant', content: payload.reply || `Sent email to ${pendingEmail.to}.` },
       ]);
       setMailbox(payload.mailbox);
+      showToast('Email sent successfully.', 'success');
     } catch (err) {
       setError(err.message);
+      showToast(err.message, 'error');
     } finally {
       setLoading(false);
+      setSendingEmail(false);
     }
   }
 
@@ -547,8 +608,13 @@ function App() {
                 </div>
               </details>
             ) : (
-              <button className="auth-button" onClick={connectGmail} type="button">
-                Login
+              <button
+                className={`auth-button ${authChecking ? 'is-loading' : ''}`}
+                disabled={authChecking}
+                onClick={connectGmail}
+                type="button"
+              >
+                {authChecking ? 'Connecting' : 'Login'}
               </button>
             )}
           </div>
@@ -748,7 +814,7 @@ function App() {
                 {loading && (
                   <div className="bubble assistant">
                     <div className="bubble-icon">
-                      <Bot size={17} />
+                      <Sparkles className="processing-sparkle" size={17} />
                     </div>
                     <div className="message-content">
                       <p className="message-line">
@@ -806,7 +872,7 @@ function App() {
                         onClick={sendApprovedEmail}
                         type="button"
                       >
-                        Send Email
+                        {sendingEmail ? 'Sending...' : 'Send Email'}
                       </button>
                       <button
                         className="cancel-approval"
@@ -835,7 +901,7 @@ function App() {
                     placeholder="Ask PulseMail to summarize, draft, prioritize, or send..."
                   />
                   <button disabled={loading || !input.trim()} type="submit" aria-label="Send message">
-                    <Send size={18} />
+                    {loading ? <span className="button-spinner" /> : <Send size={18} />}
                   </button>
                 </form>
               </div>
@@ -844,6 +910,12 @@ function App() {
         )}
 
         {error && <p className="error">{error}</p>}
+        {toast && (
+          <div className={`toast ${toast.tone}`} role="status" aria-live="polite">
+            <CheckCircle2 size={17} />
+            <span>{toast.message}</span>
+          </div>
+        )}
       </section>
     </main>
   );
